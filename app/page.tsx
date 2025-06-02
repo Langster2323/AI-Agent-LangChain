@@ -1,22 +1,35 @@
 "use client"
 
 import type React from "react"
-import { useState } from "react"
+import { useState, useRef, useEffect } from "react"
 import { Button } from "@/app/components/ui/atoms/button"
 import { Input } from "@/app/components/ui/atoms/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/app/components/ui/organisms/card"
 import { Badge } from "@/app/components/ui/atoms/badge"
 import { Loader2, FileText, Database } from "lucide-react"
 
+interface Message {
+  role: "user" | "assistant"
+  content: string
+  source?: string
+  context?: string
+}
+
 export default function Home() {
   const [query, setQuery] = useState("")
-  const [result, setResult] = useState<{
-    answer: string
-    source: string
-    context: string
-  } | null>(null)
+  const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+  const abortControllerRef = useRef<AbortController | null>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const lastMessageRef = useRef<HTMLDivElement>(null)
+
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [messages])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -24,7 +37,21 @@ export default function Home() {
 
     setLoading(true)
     setError("")
-    setResult(null)
+
+    // Cancel any ongoing request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+
+    // Create new abort controller
+    abortControllerRef.current = new AbortController()
+
+    // Add user message immediately
+    const userMessage: Message = {
+      role: "user",
+      content: query
+    }
+    setMessages(prev => [...prev, userMessage])
 
     try {
       const response = await fetch("/api/agent", {
@@ -33,24 +60,82 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ query }),
+        signal: abortControllerRef.current.signal,
       })
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`)
       }
 
-      const data = await response.json()
+      if (!response.body) {
+        throw new Error("No response body")
+      }
 
-      if (data.error) {
-        setError(data.error)
-      } else {
-        setResult(data)
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let answer = ""
+      let metadata: any = null
+
+      // Add assistant message placeholder
+      const assistantMessage: Message = {
+        role: "assistant",
+        content: "",
+        source: "PDF",
+        context: ""
+      }
+      setMessages(prev => [...prev, assistantMessage])
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value)
+        const lines = chunk.split("\n")
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+
+          try {
+            const data = JSON.parse(line)
+            if (data.type === "metadata") {
+              metadata = data.data
+              // Update the assistant message with metadata
+              setMessages(prev => {
+                const newMessages = [...prev]
+                const lastMessage = newMessages[newMessages.length - 1]
+                if (lastMessage.role === "assistant") {
+                  lastMessage.source = metadata.source
+                  lastMessage.context = metadata.context
+                }
+                return newMessages
+              })
+            }
+          } catch {
+            // If it's not JSON, it's part of the answer
+            answer += line
+            // Update the assistant message content
+            setMessages(prev => {
+              const newMessages = [...prev]
+              const lastMessage = newMessages[newMessages.length - 1]
+              if (lastMessage.role === "assistant") {
+                lastMessage.content = answer
+              }
+              return newMessages
+            })
+          }
+        }
       }
     } catch (error) {
-      console.error("Error:", error)
-      setError("Failed to get response. Please try again.")
+      if (error instanceof Error && error.name === "AbortError") {
+        console.log("Request aborted")
+      } else {
+        console.error("Error:", error)
+        setError("Failed to get response. Please try again.")
+      }
     } finally {
       setLoading(false)
+      setQuery("")
+      abortControllerRef.current = null
     }
   }
 
@@ -86,7 +171,7 @@ export default function Home() {
           <p className="text-gray-600">Ask questions about military doctrine. Access (PDF) or form fields (CSV)</p>
         </div>
 
-        <Card className="mb-6">
+        <Card className="mb-6 sticky top-4 z-10 bg-white/80 backdrop-blur-sm">
           <CardHeader>
             <CardTitle>Ask a Question</CardTitle>
           </CardHeader>
@@ -126,33 +211,41 @@ export default function Home() {
           </Card>
         )}
 
-        {result && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Answer</CardTitle>
-                <Badge className={`${getSourceColor(result.source)} flex items-center gap-1`}>
-                  {getSourceIcon(result.source)}
-                  Source: {result.source}
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="prose max-w-none">
-                <p className="text-gray-800 leading-relaxed">{result.answer}</p>
-              </div>
+        <div className="space-y-4">
+          {messages.map((message, index) => (
+            <Card 
+              key={index}
+              ref={index === messages.length - 1 ? lastMessageRef : null}
+            >
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle>{message.role === "user" ? "Your Question" : "Answer"}</CardTitle>
+                  {message.role === "assistant" && message.source && (
+                    <Badge className={`${getSourceColor(message.source)} flex items-center gap-1`}>
+                      {getSourceIcon(message.source)}
+                      Source: {message.source}
+                    </Badge>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="prose max-w-none">
+                  <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">{message.content}</p>
+                </div>
 
-              {result.context && (
-                <details className="mt-4">
-                  <summary className="cursor-pointer text-sm font-medium text-gray-600 hover:text-gray-800">
-                    View Context Used
-                  </summary>
-                  <div className="mt-2 p-3 bg-gray-50 rounded-md text-sm text-gray-700">{result.context}</div>
-                </details>
-              )}
-            </CardContent>
-          </Card>
-        )}
+                {message.role === "assistant" && message.context && (
+                  <details className="mt-4">
+                    <summary className="cursor-pointer text-sm font-medium text-gray-600 hover:text-gray-800">
+                      View Context Used
+                    </summary>
+                    <div className="mt-2 p-3 bg-gray-50 rounded-md text-sm text-gray-700">{message.context}</div>
+                  </details>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+          <div ref={messagesEndRef} />
+        </div>
 
         <div className="mt-8 text-center text-sm text-gray-500">
           <p>

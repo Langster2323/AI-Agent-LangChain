@@ -1,6 +1,9 @@
-import { generateText } from "ai"
-import { openai } from "@ai-sdk/openai"
+import OpenAI from "openai"
 import { createPdfVectorStore, createCsvVectorStore } from "./data"
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+})
 
 // Common military terms and their variations
 const MILITARY_TERMS = {
@@ -51,29 +54,42 @@ export async function runAgent(query: string, pdfBuffer: ArrayBuffer, csvData: a
     console.log("Search terms:", searchTerms)
 
     const results: any[] = []
+    let hasPdfResults = false
+    let hasCsvResults = false
 
     // Search in PDF with multiple terms
     const pdfResults = await Promise.all(
       searchTerms.map(term => pdfVectorStore.similaritySearch(term, 5))
     )
-    results.push(...pdfResults.flat())
+    const flatPdfResults = pdfResults.flat()
+    if (flatPdfResults.length > 0) {
+      hasPdfResults = true
+      results.push(...flatPdfResults)
+    }
 
     // Search in CSV if relevant
-    if (
-      query.toLowerCase().includes("field") ||
-      query.toLowerCase().includes("form") ||
-      query.toLowerCase().includes("template") ||
-      query.toLowerCase().includes("award") ||
-      query.toLowerCase().includes("achievement") ||
-      query.toLowerCase().includes("bullet")
-    ) {
+    const csvSearchTerms = [
+      "field", "form", "template", "award", "achievement", "bullet",
+      "input", "required", "mandatory", "optional", "section", "column",
+      "header", "data", "entry", "fill", "complete", "submit"
+    ]
+
+    const shouldSearchCsv = csvSearchTerms.some(term => 
+      query.toLowerCase().includes(term.toLowerCase())
+    )
+
+    if (shouldSearchCsv) {
       const csvResults = await Promise.all(
         searchTerms.map(term => csvVectorStore.similaritySearch(term, 5))
       )
-      results.push(...csvResults.flat())
+      const flatCsvResults = csvResults.flat()
+      if (flatCsvResults.length > 0) {
+        hasCsvResults = true
+        results.push(...flatCsvResults)
+      }
     }
 
-    console.log(`Found ${results.length} relevant results`)
+    console.log(`Found ${results.length} relevant results (PDF: ${hasPdfResults}, CSV: ${hasCsvResults})`)
 
     // Remove duplicates and sort by relevance
     const uniqueResults = Array.from(new Set(results.map(r => r.pageContent)))
@@ -102,27 +118,41 @@ Question: ${query}
 
 Answer:`
 
-    const { text } = await generateText({
-      model: openai("gpt-4"),
-      prompt,
-      system: "You are an administrative NCO in the US Army. You are tasked with providing information about the Army Field Manual (FM) 5-0 and the form fields for the FM 5-0. Provide detailed, concise, and accurate information based on the provided context. When explaining processes, break them down into clear, sequential steps.",
+    // Create a stream from the OpenAI API
+    const stream = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [
+        {
+          role: "system",
+          content: "You are an administrative NCO in the US Army. You are tasked with providing information about the Army Field Manual (FM) 5-0 and the form fields for the FM 5-0. Provide detailed, concise, and accurate information based on the provided context. When explaining processes, break them down into clear, sequential steps."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      stream: true
     })
 
-    return { 
-      answer: text, 
-      source: "PDF", 
-      context: displayContext,
-      hasMoreContext: fullContext.length > 500,
-      totalResults: results.length
+    // Determine the source based on which data sources were used
+    let source = "PDF"
+    if (hasPdfResults && hasCsvResults) {
+      source = "BOTH"
+    } else if (hasCsvResults) {
+      source = "CSV"
+    }
+
+    return {
+      stream,
+      metadata: {
+        source,
+        context: displayContext,
+        hasMoreContext: fullContext.length > 500,
+        totalResults: results.length
+      }
     }
   } catch (error) {
     console.error("Agent error:", error)
-    return {
-      answer: "I encountered an error while processing your request. Please try again.",
-      source: "ERROR",
-      context: "Error occurred while processing the request.",
-      hasMoreContext: false,
-      totalResults: 0
-    }
+    throw new Error(`Agent error: ${error instanceof Error ? error.message : String(error)}`)
   }
 }

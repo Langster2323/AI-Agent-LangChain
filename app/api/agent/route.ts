@@ -25,9 +25,36 @@ export async function POST(req: NextRequest) {
     const csvText = readFileSync(csvPath, "utf-8")
     const csvData = parseCsv(csvText)
 
-    const result = await runAgent(query, pdfArrayBuffer, csvData)
+    // Get the stream and metadata from the agent
+    const { stream, metadata } = await runAgent(query, pdfArrayBuffer, csvData)
 
-    return NextResponse.json(result)
+    // Create a new stream that includes the metadata
+    const responseStream = new ReadableStream({
+      async start(controller) {
+        try {
+          // Send metadata first
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({ type: "metadata", data: metadata }) + "\n"))
+          
+          // Then pipe the AI response stream
+          for await (const chunk of stream) {
+            const content = chunk.choices[0]?.delta?.content || ""
+            if (content) {
+              controller.enqueue(new TextEncoder().encode(content))
+            }
+          }
+          controller.close()
+        } catch (error) {
+          console.error("Stream error:", error)
+          controller.error(error)
+        }
+      }
+    })
+
+    return new Response(responseStream, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+      },
+    })
   } catch (error) {
     console.error("API error:", error)
     return NextResponse.json(
@@ -35,7 +62,7 @@ export async function POST(req: NextRequest) {
         error: "Internal server error",
         details: error instanceof Error ? error.message : String(error),
       },
-      { status: 500 },
+      { status: 500 }
     )
   }
 }
