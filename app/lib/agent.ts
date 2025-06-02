@@ -1,6 +1,6 @@
 import { generateText } from "ai"
 import { openai } from "@ai-sdk/openai"
-import { createPdfVectorStore, createCsvVectorStore } from "@/app/lib/data"
+import { createPdfVectorStore, createCsvVectorStore } from "./data"
 
 // Common military terms and their variations
 const MILITARY_TERMS = {
@@ -82,10 +82,13 @@ export async function runAgent(query: string, pdfBuffer: ArrayBuffer, csvData: a
 
     const fullContext = uniqueResults.map((r) => r.pageContent).join("\n\n")
     
-    // Ensure we have a minimum amount of context to display
-    const displayContext = fullContext.length > 0 
+    // Always show context if we have results
+    const displayContext = results.length > 0
       ? fullContext.substring(0, Math.min(500, fullContext.length)) + (fullContext.length > 500 ? "..." : "")
       : "No relevant context found."
+
+    console.log("Context length:", fullContext.length)
+    console.log("Display context:", displayContext)
 
     const prompt = `You are an expert in military doctrine and forms. Use the following context to answer the question.
 If you cannot answer the question from the context, respond that you cannot answer the question based on the available information.
@@ -109,7 +112,8 @@ Answer:`
       answer: text, 
       source: "PDF", 
       context: displayContext,
-      hasMoreContext: fullContext.length > 500
+      hasMoreContext: fullContext.length > 500,
+      totalResults: results.length
     }
   } catch (error) {
     console.error("Agent error:", error)
@@ -117,7 +121,8 @@ Answer:`
       answer: "I encountered an error while processing your request. Please try again.",
       source: "ERROR",
       context: "Error occurred while processing the request.",
-      hasMoreContext: false
+      hasMoreContext: false,
+      totalResults: 0
     }
   }
 }
