@@ -7,6 +7,7 @@ import { Input } from "@/app/components/ui/atoms/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/app/components/ui/organisms/card"
 import { Badge } from "@/app/components/ui/atoms/badge"
 import { Loader2, FileText, Database } from "lucide-react"
+import { FileUpload } from "@/app/components/ui/organisms/file-upload"
 
 interface Message {
   role: "user" | "assistant"
@@ -20,6 +21,7 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+  const [uploadedFiles, setUploadedFiles] = useState<{ pdf?: File; csv?: File }>({})
   const abortControllerRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const lastMessageRef = useRef<HTMLDivElement>(null)
@@ -30,6 +32,10 @@ export default function Home() {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" })
     }
   }, [messages])
+
+  const handleFileUpload = async (file: File, type: "pdf" | "csv") => {
+    setUploadedFiles(prev => ({ ...prev, [type]: file }))
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -54,12 +60,19 @@ export default function Home() {
     setMessages(prev => [...prev, userMessage])
 
     try {
+      const formData = new FormData()
+      formData.append("query", query)
+      
+      if (uploadedFiles.pdf) {
+        formData.append("pdf", uploadedFiles.pdf)
+      }
+      if (uploadedFiles.csv) {
+        formData.append("csv", uploadedFiles.csv)
+      }
+
       const response = await fetch("/api/agent", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ query }),
+        body: formData,
         signal: abortControllerRef.current.signal,
       })
 
@@ -171,87 +184,91 @@ export default function Home() {
           <p className="text-gray-600">Ask questions about military doctrine. Access (PDF) or form fields (CSV)</p>
         </div>
 
-        <Card className="mb-6 sticky top-4 z-10 bg-white/80 backdrop-blur-sm">
-          <CardHeader>
-            <CardTitle>Ask a Question</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="flex gap-2">
-                <Input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="e.g., What are the key principles of planning? or What fields are required for awards?"
-                  className="flex-1"
-                  disabled={loading}
-                />
-                <Button type="submit" disabled={loading || !query.trim()}>
-                  {loading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Processing...
-                    </>
-                  ) : (
-                    "Ask"
-                  )}
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
+        <div className="space-y-6">
+          <FileUpload onFileUpload={handleFileUpload} />
 
-        {error && (
-          <Card className="mb-6 border-red-200">
-            <CardContent className="pt-6">
-              <div className="text-red-600">
-                <strong>Error:</strong> {error}
-              </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>Ask a Question</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="flex gap-2">
+                  <Input
+                    type="text"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="e.g., What are the key principles of planning? or What fields are required for awards?"
+                    className="flex-1"
+                    disabled={loading}
+                  />
+                  <Button type="submit" disabled={loading || !query.trim()}>
+                    {loading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      "Ask"
+                    )}
+                  </Button>
+                </div>
+              </form>
             </CardContent>
           </Card>
-        )}
 
-        <div className="space-y-4">
-          {messages.map((message, index) => (
-            <Card 
-              key={index}
-              ref={index === messages.length - 1 ? lastMessageRef : null}
-            >
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>{message.role === "user" ? "Your Question" : "Answer"}</CardTitle>
-                  {message.role === "assistant" && message.source && (
-                    <Badge className={`${getSourceColor(message.source)} flex items-center gap-1`}>
-                      {getSourceIcon(message.source)}
-                      Source: {message.source}
-                    </Badge>
-                  )}
+          {error && (
+            <Card className="mb-6 border-red-200">
+              <CardContent className="pt-6">
+                <div className="text-red-600">
+                  <strong>Error:</strong> {error}
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="prose max-w-none">
-                  <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">{message.content}</p>
-                </div>
-
-                {message.role === "assistant" && message.context && (
-                  <details className="mt-4">
-                    <summary className="cursor-pointer text-sm font-medium text-gray-600 hover:text-gray-800">
-                      View Context Used
-                    </summary>
-                    <div className="mt-2 p-3 bg-gray-50 rounded-md text-sm text-gray-700">{message.context}</div>
-                  </details>
-                )}
               </CardContent>
             </Card>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
+          )}
 
-        <div className="mt-8 text-center text-sm text-gray-500">
-          <p>
-            This AI agent uses LangChain.js to retrieve information from military doctrine (PDF) and form templates
-            (CSV).
-          </p>
+          <div className="space-y-4">
+            {messages.map((message, index) => (
+              <Card 
+                key={index}
+                ref={index === messages.length - 1 ? lastMessageRef : null}
+              >
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>{message.role === "user" ? "Your Question" : "Answer"}</CardTitle>
+                    {message.role === "assistant" && message.source && (
+                      <Badge className={`${getSourceColor(message.source)} flex items-center gap-1`}>
+                        {getSourceIcon(message.source)}
+                        Source: {message.source}
+                      </Badge>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="prose max-w-none">
+                    <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">{message.content}</p>
+                  </div>
+
+                  {message.role === "assistant" && message.context && (
+                    <details className="mt-4">
+                      <summary className="cursor-pointer text-sm font-medium text-gray-600 hover:text-gray-800">
+                        View Context Used
+                      </summary>
+                      <div className="mt-2 p-3 bg-gray-50 rounded-md text-sm text-gray-700">{message.context}</div>
+                    </details>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+
+          <div className="mt-8 text-center text-sm text-gray-500">
+            <p>
+              This AI agent uses LangChain.js to retrieve information from military doctrine (PDF) and form templates
+              (CSV).
+            </p>
+          </div>
         </div>
       </div>
     </div>

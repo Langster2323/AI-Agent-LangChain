@@ -6,27 +6,45 @@ import { readFileSync } from "fs"
 
 export async function POST(req: NextRequest) {
   try {
-    const { query } = await req.json()
+    const formData = await req.formData()
+    const query = formData.get("query") as string
+    const uploadedPdf = formData.get("pdf") as File | null
+    const uploadedCsv = formData.get("csv") as File | null
 
     if (!query) {
       return NextResponse.json({ error: "Query is required" }, { status: 400 })
     }
 
-    // Load PDF file from public directory
-    const pdfPath = join(process.cwd(), "public", "FM-5-0.pdf")
-    const pdfBuffer = readFileSync(pdfPath)
-    const pdfArrayBuffer = pdfBuffer.buffer.slice(
-      pdfBuffer.byteOffset,
-      pdfBuffer.byteOffset + pdfBuffer.byteLength
-    )
+    let pdfBuffer: ArrayBuffer
+    let csvData: any[] = []
 
-    // Load CSV file from public directory
-    const csvPath = join(process.cwd(), "public", "template_fields.csv")
-    const csvText = readFileSync(csvPath, "utf-8")
-    const csvData = parseCsv(csvText)
+    // Handle uploaded PDF if provided, otherwise use default
+    if (uploadedPdf) {
+      const arrayBuffer = await uploadedPdf.arrayBuffer()
+      pdfBuffer = arrayBuffer
+    } else {
+      // Load default PDF file from public directory
+      const pdfPath = join(process.cwd(), "public", "FM-5-0.pdf")
+      const pdfFile = readFileSync(pdfPath)
+      pdfBuffer = pdfFile.buffer.slice(
+        pdfFile.byteOffset,
+        pdfFile.byteOffset + pdfFile.byteLength
+      )
+    }
+
+    // Handle uploaded CSV if provided, otherwise use default
+    if (uploadedCsv) {
+      const csvText = await uploadedCsv.text()
+      csvData = parseCsv(csvText)
+    } else {
+      // Load default CSV file from public directory
+      const csvPath = join(process.cwd(), "public", "template_fields.csv")
+      const csvText = readFileSync(csvPath, "utf-8")
+      csvData = parseCsv(csvText)
+    }
 
     // Get the stream and metadata from the agent
-    const { stream, metadata } = await runAgent(query, pdfArrayBuffer, csvData)
+    const { stream, metadata } = await runAgent(query, pdfBuffer, csvData)
 
     // Create a new stream that includes the metadata
     const responseStream = new ReadableStream({
@@ -56,12 +74,9 @@ export async function POST(req: NextRequest) {
       },
     })
   } catch (error) {
-    console.error("API error:", error)
+    console.error("Error in API route:", error)
     return NextResponse.json(
-      {
-        error: "Internal server error",
-        details: error instanceof Error ? error.message : String(error),
-      },
+      { error: "Internal server error" },
       { status: 500 }
     )
   }
