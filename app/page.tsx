@@ -39,6 +39,7 @@ export default function Home() {
     setError("")
 
     // Cancel any ongoing request
+    //prevents multiple requests from being sent at the same time
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
     }
@@ -70,8 +71,9 @@ export default function Home() {
       if (!response.body) {
         throw new Error("No response body")
       }
-
+      //read the response body
       const reader = response.body.getReader()
+      //decode the response body. Converts the binary data into a string
       const decoder = new TextDecoder()
       let answer = ""
       let metadata: any = null
@@ -86,15 +88,18 @@ export default function Home() {
       setMessages(prev => [...prev, assistantMessage])
 
       while (true) {
+        // Chunk of data. Reads the response body in chunks
         const { done, value } = await reader.read()
         if (done) break
-
+        //decodes the binary data into a string
         const chunk = decoder.decode(value)
+        //splits the string into an array of lines
         const lines = chunk.split("\n")
-
+        //iterates over the lines
         for (const line of lines) {
           if (!line.trim()) continue
-
+          //checks if the line is empty
+          // Handles both metadata and answer
           try {
             const data = JSON.parse(line)
             if (data.type === "metadata") {

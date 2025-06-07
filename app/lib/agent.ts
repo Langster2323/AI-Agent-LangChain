@@ -12,11 +12,12 @@ const MILITARY_TERMS = {
   "planning": ["plan", "planning process", "planning procedures", "planning steps"],
   "process": ["procedure", "methodology", "approach", "steps"],
 }
-
+//expands the query to include variations of military terms
 function expandQuery(query: string): string[] {
+  //splits the query into an array of terms
   const terms = query.toLowerCase().split(" ")
   const expandedTerms: string[] = [query]
-
+  //adds the original query to the array
   // Add variations of military terms
   terms.forEach(term => {
     Object.entries(MILITARY_TERMS).forEach(([key, variations]) => {
