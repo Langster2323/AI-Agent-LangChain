@@ -1,7 +1,89 @@
+import { Document } from "langchain/document"
 import { RecursiveCharacterTextSplitter } from "langchain/text_splitter"
 import { OpenAIEmbeddings } from "@langchain/openai"
 import { MemoryVectorStore } from "langchain/vectorstores/memory"
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf"
+
+// MCP Implementation
+class MemoryContextProcessor {
+  private memory: Map<string, any> = new Map()
+  private contextWindow: number = 5
+  private maxTokens: number = 4000
+
+  constructor(contextWindow: number = 5, maxTokens: number = 4000) {
+    this.contextWindow = contextWindow
+    this.maxTokens = maxTokens
+  }
+
+  // Add content to memory with metadata
+  addToMemory(key: string, content: string, metadata: any = {}) {
+    this.memory.set(key, {
+      content,
+      metadata,
+      timestamp: Date.now(),
+      tokens: this.estimateTokens(content)
+    })
+  }
+
+  // Get relevant context based on query
+  async getRelevantContext(query: string, embeddings: OpenAIEmbeddings): Promise<string> {
+    const queryEmbedding = await embeddings.embedQuery(query)
+    const contexts: { key: string; similarity: number; content: string }[] = []
+
+    // Calculate similarity for each memory item
+    for (const [key, value] of this.memory.entries()) {
+      const contentEmbedding = await embeddings.embedQuery(value.content)
+      const similarity = this.cosineSimilarity(queryEmbedding, contentEmbedding)
+      contexts.push({ key, similarity, content: value.content })
+    }
+
+    // Sort by similarity and get top contexts
+    contexts.sort((a, b) => b.similarity - a.similarity)
+    const topContexts = contexts.slice(0, this.contextWindow)
+
+    // Combine contexts while respecting token limit
+    let combinedContext = ""
+    let totalTokens = 0
+
+    for (const context of topContexts) {
+      const contextTokens = this.estimateTokens(context.content)
+      if (totalTokens + contextTokens <= this.maxTokens) {
+        combinedContext += context.content + "\n\n"
+        totalTokens += contextTokens
+      } else {
+        break
+      }
+    }
+
+    return combinedContext.trim()
+  }
+
+  // Clear old memories
+  clearOldMemories(maxAge: number = 3600000) { // Default 1 hour
+    const now = Date.now()
+    for (const [key, value] of this.memory.entries()) {
+      if (now - value.timestamp > maxAge) {
+        this.memory.delete(key)
+      }
+    }
+  }
+
+  // Helper function to estimate tokens
+  private estimateTokens(text: string): number {
+    return Math.ceil(text.length / 4) // Rough estimate
+  }
+
+  // Helper function to calculate cosine similarity
+  private cosineSimilarity(a: number[], b: number[]): number {
+    const dotProduct = a.reduce((sum, val, i) => sum + val * b[i], 0)
+    const normA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0))
+    const normB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0))
+    return dotProduct / (normA * normB)
+  }
+}
+
+// Create a singleton instance
+const mcp = new MemoryContextProcessor()
 
 export async function loadAndProcessPdf(pdfBuffer: ArrayBuffer) {
   try {
@@ -33,27 +115,35 @@ export async function loadAndProcessPdf(pdfBuffer: ArrayBuffer) {
     const splitDocs = await textSplitter.splitDocuments(docs)
     console.log(`Split into ${splitDocs.length} chunks`)
     
-    // Process each chunk to improve context
+    // Process each chunk and add to MCP
     const processedDocs = splitDocs.map(doc => {
       const content = doc.pageContent
         .replace(/\s+/g, ' ')  // Normalize whitespace
         .replace(/\n/g, ' ')   // Replace newlines with spaces
         .trim()
       
-      // Add metadata to help with context
-      return {
+      // Add to MCP with metadata
+      mcp.addToMemory(
+        `pdf_${doc.metadata.page || 1}`,
         content,
-        pageNumber: doc.metadata.page,
-        section: extractSection(content),
-      }
+        {
+          source: "pdf",
+          page: doc.metadata.page || 1,
+          ...doc.metadata
+        }
+      )
+
+      return new Document({
+        pageContent: content,
+        metadata: {
+          source: "pdf",
+          page: doc.metadata.page || 1,
+          ...doc.metadata
+        }
+      })
     })
 
-    // Log sample content for verification
-    if (processedDocs.length > 0) {
-      console.log("Sample content from first chunk:", processedDocs[0].content.substring(0, 200))
-    }
-
-    return processedDocs.map(doc => doc.content)
+    return processedDocs
   } catch (error) {
     console.error("Error loading or processing PDF:", error)
     return []
@@ -72,10 +162,31 @@ export async function createPdfVectorStore(pdfBuffer: ArrayBuffer) {
   
   const embeddings = new OpenAIEmbeddings({
     apiKey: process.env.OPENAI_API_KEY,
-    modelName: "text-embedding-3-large", // Using the latest embedding model
+    modelName: "text-embedding-3-large",
   })
+
+  const vectorStore = await MemoryVectorStore.fromDocuments(docs, embeddings)
   
-  const vectorStore = await MemoryVectorStore.fromTexts(docs, [], embeddings)
+  // Override similarity search to use MCP
+  const originalSimilaritySearch = vectorStore.similaritySearch.bind(vectorStore)
+  vectorStore.similaritySearch = async (query: string, k?: number) => {
+    // Get relevant context from MCP
+    const context = await mcp.getRelevantContext(query, embeddings)
+    
+    // Combine with vector store results
+    const vectorResults = await originalSimilaritySearch(query, k)
+    
+    // Add context to results
+    if (context) {
+      vectorResults.unshift(new Document({
+        pageContent: context,
+        metadata: { source: "mcp", type: "context" }
+      }))
+    }
+    
+    return vectorResults
+  }
+
   return vectorStore
 }
 
@@ -87,10 +198,24 @@ export async function createCsvVectorStore(csvData: any[]) {
     const category = item.category || item.Category || ""
     const required = item.required || item.Required || ""
     
-    return `Category: ${category}
+    const content = `Category: ${category}
 Field: ${fieldLabel}
 Required: ${required}
 Instructions: ${instructions}`
+
+    // Add to MCP
+    mcp.addToMemory(
+      `csv_${fieldLabel}`,
+      content,
+      {
+        source: "csv",
+        field: fieldLabel,
+        category,
+        required
+      }
+    )
+
+    return content
   })
 
   const textSplitter = new RecursiveCharacterTextSplitter({
@@ -106,6 +231,27 @@ Instructions: ${instructions}`
   })
   
   const vectorStore = await MemoryVectorStore.fromTexts(docs, [], embeddings)
+  
+  // Override similarity search to use MCP
+  const originalSimilaritySearch = vectorStore.similaritySearch.bind(vectorStore)
+  vectorStore.similaritySearch = async (query: string, k?: number) => {
+    // Get relevant context from MCP
+    const context = await mcp.getRelevantContext(query, embeddings)
+    
+    // Combine with vector store results
+    const vectorResults = await originalSimilaritySearch(query, k)
+    
+    // Add context to results
+    if (context) {
+      vectorResults.unshift(new Document({
+        pageContent: context,
+        metadata: { source: "mcp", type: "context" }
+      }))
+    }
+    
+    return vectorResults
+  }
+
   return vectorStore
 }
 
