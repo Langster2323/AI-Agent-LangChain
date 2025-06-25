@@ -1,9 +1,10 @@
 import OpenAI from "openai"
 import { createPdfVectorStore, createCsvVectorStore } from "./data"
+import { wrapOpenAI } from "langsmith/wrappers";
 
-const openai = new OpenAI({
+const openai = wrapOpenAI(new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-})
+}))
 
 // Common military terms and their variations
 const MILITARY_TERMS = {
