@@ -1,7 +1,8 @@
 import { RecursiveCharacterTextSplitter } from "langchain/text_splitter"
-import { OpenAIEmbeddings } from "@langchain/openai"
+// import { OpenAIEmbeddings } from "@langchain/openai"
 import { MemoryVectorStore } from "langchain/vectorstores/memory"
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf"
+import { VoyageEmbeddings } from "@langchain/community/embeddings/voyage"
 
 export async function loadAndProcessPdf(pdfBuffer: ArrayBuffer) {
   try {
@@ -70,10 +71,13 @@ export async function createPdfVectorStore(pdfBuffer: ArrayBuffer) {
   const docs = await loadAndProcessPdf(pdfBuffer)
   console.log(`Creating vector store with ${docs.length} documents`)
   
-  const embeddings = new OpenAIEmbeddings({
-    apiKey: process.env.OPENAI_API_KEY,
-    modelName: "text-embedding-3-large", // Using the latest embedding model
-  })
+  const embeddings = new VoyageEmbeddings({
+    apiKey: process.env.VOYAGE_API_KEY, // instead of VOYAGE_API_KEY_SECOND
+    modelName: "voyage-large-2", // Specify the desired Voyage AI model
+    inputType: "document", // Optional: 'query', 'document', or omit for None
+    truncation: true, // Optional: enable truncation
+    // ... other optional parameters
+  });
   
   const vectorStore = await MemoryVectorStore.fromTexts(docs, [], embeddings)
   return vectorStore
@@ -100,10 +104,14 @@ Instructions: ${instructions}`
   })
 
   const docs = await textSplitter.splitText(texts.join("\n\n"))
-  const embeddings = new OpenAIEmbeddings({
-    apiKey: process.env.OPENAI_API_KEY,
-    modelName: "text-embedding-3-large",
-  })
+  const embeddings = new VoyageEmbeddings({
+    apiKey: process.env.VOYAGE_API_KEY, // instead of VOYAGE_API_KEY_SECOND
+    modelName: "voyage-large-2", // Specify the desired Voyage AI model
+    inputType: "document", // Optional: 'query', 'document', or omit for None
+    truncation: true, // Optional: enable truncation
+    // ... other optional parameters
+  });
+  console.log(process.env.VOYAGE_API_KEY, "api key")
   
   const vectorStore = await MemoryVectorStore.fromTexts(docs, [], embeddings)
   return vectorStore
